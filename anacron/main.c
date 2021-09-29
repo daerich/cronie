@@ -28,6 +28,7 @@
 #include <sys/time.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <signal.h>
 #include <fcntl.h>
 #include <sys/types.h>
@@ -47,7 +48,7 @@ char *program_name;
 char *anacrontab = NULL;
 char *spooldir = NULL;
 int serialize, force, update_only, now,
-    no_daemon, quiet, testing_only;            /* command-line options */
+    no_daemon, quiet, testing_only, power_override;            /* command-line options */
 char **job_args;                       	       /* vector of "job" command-line arguments */
 int job_nargs;                                 /* number of these */
 char *defarg = "*";
@@ -86,6 +87,7 @@ print_usage(void)
     printf(" -s         Serialize execution of jobs\n");
     printf(" -f         Force execution of jobs, even before their time\n");
     printf(" -n         Run jobs with no delay, implies -s\n");
+    printf(" -p         Force execution even when on battery power\n")
     printf(" -d         Don't fork to the background\n");
     printf(" -q         Suppress stderr messages, only applicable with -d\n");
     printf(" -u         Update the timestamps without actually running anything\n");
@@ -97,15 +99,60 @@ print_usage(void)
     printf("\nSee the anacron(8) manpage for more details.\n");
 }
 
+static void read_file(char * readbuf, const char * filename, const char * fileext, int readbytes)
+{       
+        FILE *file;
+        char *filenamep;
+        filenamep = malloc(sizeof(char) * (strlen("/sys/class/power_supply/") + strlen(filename) + strlen(fileext) + 1));
+        filenamep = strcpy(filenamep, "/sys/class/power_supply/");
+        filenamep = strcat(filenamep, filename);
+        filenamep = strcat(filenamep, fileext);
+        if((file = fopen(filenamep, "r")) == NULL)
+            die_e("Coul'nt open file: %s!Exit!", filenamep);
+        fgets(readbuf,readbytes,file);
+        free(filenamep);
+        fclose(file);
+
+}
+
+static int isPowered(void)
+{
+    DIR *dirp;
+    struct dirent *dirent;
+    char readres[10];
+    if((dirp = opendir("/sys/class/power_supply/")) == NULL){
+        explain("Could'nt open power directory; -p is not considered");
+        return 0;
+    }
+    while((dirent = readdir(dirp)) != NULL){
+        if(strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0)
+            continue;
+        read_file(readres,dirent->d_name, "/type", 10);
+        if(strstr(readres, "Main")){
+            char readres[1];
+            read_file(readres, dirent->d_name, "/online", 2);
+            if (atoi(readres) == 1){
+                closedir(dirp);
+                return 1;
+            }else{
+                closedir(dirp);
+                return 0;
+            }
+        }       
+    }
+    closedir(dirp);
+    return 0;
+}
+
 static void
 parse_opts(int argc, char *argv[])
 /* Parse command-line options */
 {
     int opt;
 
-    quiet = no_daemon = serialize = force = update_only = now = 0;
+    quiet = no_daemon = serialize = force = update_only = now = power_override = 0;
     opterr = 0;
-    while ((opt = getopt(argc, argv, "sfundqt:TS:Vh")) != EOF)
+    while ((opt = getopt(argc, argv, "sfundqpt:TS:Vh")) != EOF)
     {
 	switch (opt)
 	{
@@ -126,6 +173,9 @@ parse_opts(int argc, char *argv[])
 	    break;
 	case 'q':
 	    quiet = 1;
+	    break;
+	case 'p':
+	    power_override = 1;
 	    break;
 	case 't':
 	    free(anacrontab);
@@ -459,6 +509,8 @@ main(int argc, char *argv[])
 	++program_name; /* move pointer to char after '/' */
 
     parse_opts(argc, argv);
+    if (!isPowered() && !power_override)
+        die_e("No power supply!Exiting!(Override with -p)");
 
     if (anacrontab == NULL)
 	anacrontab = strdup(ANACRONTAB);
