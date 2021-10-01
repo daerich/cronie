@@ -87,7 +87,7 @@ print_usage(void)
     printf(" -s         Serialize execution of jobs\n");
     printf(" -f         Force execution of jobs, even before their time\n");
     printf(" -n         Run jobs with no delay, implies -s\n");
-    printf(" -p         Force execution even when on battery power\n")
+    printf(" -p         Force execution even when on battery power\n");
     printf(" -d         Don't fork to the background\n");
     printf(" -q         Suppress stderr messages, only applicable with -d\n");
     printf(" -u         Update the timestamps without actually running anything\n");
