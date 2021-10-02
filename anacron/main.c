@@ -34,6 +34,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <string.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <locale.h>
 #include "global.h"
@@ -87,7 +88,7 @@ print_usage(void)
     printf(" -s         Serialize execution of jobs\n");
     printf(" -f         Force execution of jobs, even before their time\n");
     printf(" -n         Run jobs with no delay, implies -s\n");
-    printf(" -p         Force execution even when on battery power\n");
+    printf(" -p <integer> Force execution even when on battery power\n");
     printf(" -d         Don't fork to the background\n");
     printf(" -q         Suppress stderr messages, only applicable with -d\n");
     printf(" -u         Update the timestamps without actually running anything\n");
@@ -99,23 +100,72 @@ print_usage(void)
     printf("\nSee the anacron(8) manpage for more details.\n");
 }
 
-static void read_file(char * readbuf, const char * filename, const char * fileext, int readbytes)
+static char * 
+vstrcat(int c, ...)
+{
+	va_list ap;
+	char * res = NULL;
+	size_t length = 0;
+	va_start(ap, c);
+	for(int idx = 0;idx < c; idx++){
+		length += strlen(va_arg(ap, char *));
+	}
+	va_end(ap);
+	res = malloc(sizeof(char)*(length + 1));
+	va_start(ap,c);
+	for(int idx = 0;idx < c; idx++){
+		if(idx == 0)
+			strcpy(res, va_arg(ap, char *));
+		else
+			strcat(res, va_arg(ap, char *));
+	}
+	va_end(ap);
+	return res;
+}
+
+static void 
+read_file(char * readbuf, const char * filename, const char * fileext, int readbytes)
 {       
         FILE *file;
         char *filenamep;
-        filenamep = malloc(sizeof(char) * (strlen("/sys/class/power_supply/") + strlen(filename) + strlen(fileext) + 1));
-        filenamep = strcpy(filenamep, "/sys/class/power_supply/");
-        filenamep = strcat(filenamep, filename);
-        filenamep = strcat(filenamep, fileext);
+	filenamep = vstrcat(3, "/sys/class/power_supply/", filename, fileext);
         if((file = fopen(filenamep, "r")) == NULL)
             die_e("Coul'nt open file: %s!Exit!", filenamep);
-        fgets(readbuf,readbytes,file);
+        fgets(readbuf,readbytes + 1,file);
         free(filenamep);
         fclose(file);
 
 }
 
-static int isPowered(void)
+static int powerLeft(void)
+{
+	static int cap = 0;
+	DIR *dirp;
+	struct dirent *dirent;
+	char readres[10];
+	if((dirp = opendir("/sys/class/power_supply/")) == NULL){
+        explain("Could'nt open power directory; -p is not considered");
+        return 0;
+	}
+	while((dirent = readdir(dirp)) != NULL){
+        if(strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0)
+            continue;
+        read_file(readres,dirent->d_name, "/type", 8);
+        if(strstr(readres, "Battery")){
+			char readres[3];
+			int res;
+            read_file(readres, dirent->d_name, "/capacity", 3);
+			if((res = atoi(readres)) > cap)
+				cap = res;
+        }       
+    }
+    closedir(dirp);
+    return cap;
+
+}
+
+static int 
+isPowered(void)
 {
     DIR *dirp;
     struct dirent *dirent;
@@ -127,10 +177,10 @@ static int isPowered(void)
     while((dirent = readdir(dirp)) != NULL){
         if(strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0)
             continue;
-        read_file(readres,dirent->d_name, "/type", 10);
+        read_file(readres,dirent->d_name, "/type", 8);
         if(strstr(readres, "Main")){
             char readres[1];
-            read_file(readres, dirent->d_name, "/online", 2);
+            read_file(readres, dirent->d_name, "/online", 1);
             if (atoi(readres) == 1){
                 closedir(dirp);
                 return 1;
@@ -150,9 +200,10 @@ parse_opts(int argc, char *argv[])
 {
     int opt;
 
-    quiet = no_daemon = serialize = force = update_only = now = power_override = 0;
+    quiet = no_daemon = serialize = force = update_only = now = 0;
+    power_override = -1;
     opterr = 0;
-    while ((opt = getopt(argc, argv, "sfundqpt:TS:Vh")) != EOF)
+    while ((opt = getopt(argc, argv, "sfundqp:t:TS:Vh")) != EOF)
     {
 	switch (opt)
 	{
@@ -175,7 +226,7 @@ parse_opts(int argc, char *argv[])
 	    quiet = 1;
 	    break;
 	case 'p':
-	    power_override = 1;
+	    power_override = atoi(optarg);
 	    break;
 	case 't':
 	    free(anacrontab);
@@ -509,8 +560,14 @@ main(int argc, char *argv[])
 	++program_name; /* move pointer to char after '/' */
 
     parse_opts(argc, argv);
-    if (!isPowered() && !power_override)
-        die_e("No power supply!Exiting!(Override with -p)");
+    /* Replacement of BatterPower-Script */
+    if(!isPowered())
+        if(power_override == -1)
+            die_e("No override level specified, exiting!");
+        else if(power_override < 20)
+                die_e("Invalid power level was %d needed at least 20", power_override);
+            else if(power_override > powerLeft())
+                die_e("Not enough power left!Exiting");
 
     if (anacrontab == NULL)
 	anacrontab = strdup(ANACRONTAB);
