@@ -139,7 +139,7 @@ read_file(char * readbuf, const char * filename, const char * fileext, int readb
 
 static int powerLeft(void)
 {
-	static int cap = 0;
+	int cap = 0;
 	DIR *dirp;
 	struct dirent *dirent;
 	char readres[10];
@@ -159,6 +159,7 @@ static int powerLeft(void)
 				cap = res;
         }       
     }
+    /* Fallback - dir is empty */
     closedir(dirp);
     return cap;
 
@@ -172,7 +173,7 @@ isPowered(void)
     char readres[10];
     if((dirp = opendir("/sys/class/power_supply/")) == NULL){
         explain("Could'nt open power directory; -p is not considered");
-        return 0;
+        return 1;
     }
     while((dirent = readdir(dirp)) != NULL){
         if(strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0)
@@ -190,8 +191,9 @@ isPowered(void)
             }
         }       
     }
+    /* Fallback - dir is empty */
     closedir(dirp);
-    return 0;
+    return 1;
 }
 
 static void
